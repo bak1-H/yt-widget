@@ -1,0 +1,3 @@
+# YT Widget
+
+A lightweight Windows 11 desktop widget that plays YouTube audio without a browser: a small always-on-top glass panel (blurred or transparent, four themes) that controls [mpv](https://mpv.io) over its IPC pipe and resolves songs with [yt-dlp](https://github.com/yt-dlp/yt-dlp), with a live queue, history, saved playlists, autoplay from YouTube recommendations, repeat, cover art, prefetching of upcoming songs, an optional on-disk song cache and a tray icon; the interface is in Spanish. Requirements: Windows 11, Python 3.12, mpv (`winget install shinchiro.mpv`) and `pip install -r requirements.txt`; run it with `pythonw main.py` and the tests with `python -m unittest`.
