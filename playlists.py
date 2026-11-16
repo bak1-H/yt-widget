@@ -9,6 +9,7 @@ from track import Track
 
 MAX_NAME_LENGTH = 40
 BACKUP_SUFFIX = ".bak"
+FAVORITES = texts.FAVORITES
 
 Playlists = dict[str, list[Track]]
 
@@ -34,14 +35,15 @@ class PlaylistStore(Protocol):
 class PlaylistLibrary:
     def __init__(self, store: PlaylistStore) -> None:
         self._store = store
-        self._playlists = store.load()
+        self._playlists = with_favorites(store.load())
 
     @property
     def load_warning(self) -> str | None:
         return self._store.load_warning
 
     def names(self) -> list[str]:
-        return sorted(self._playlists, key=str.casefold)
+        others = sorted((name for name in self._playlists if name != FAVORITES), key=str.casefold)
+        return [FAVORITES, *others]
 
     def tracks(self, name: str) -> tuple[Track, ...]:
         return tuple(self._playlists.get(name, ()))
@@ -51,6 +53,9 @@ class PlaylistLibrary:
 
     def contains(self, name: str, uri: str) -> bool:
         return self.index_of(name, uri) is not None
+
+    def is_favorite(self, uri: str) -> bool:
+        return self.contains(FAVORITES, uri)
 
     def names_containing(self, uri: str) -> list[str]:
         return [name for name in self.names() if self.contains(name, uri)]
@@ -74,6 +79,8 @@ class PlaylistLibrary:
         self._commit(lambda: self._playlists.__setitem__(name, list(tracks)))
 
     def delete(self, name: str) -> None:
+        if name == FAVORITES:
+            raise PlaylistNameError(texts.FAVORITES_PROTECTED)
         if name in self._playlists:
             self._commit(lambda: self._playlists.pop(name))
 
@@ -145,6 +152,17 @@ class JsonPlaylistStore:
             self.load_warning = texts.PLAYLISTS_DAMAGED_NO_BACKUP
             return
         self.load_warning = texts.playlists_damaged(backup.name)
+
+
+def with_favorites(playlists: Playlists) -> Playlists:
+    favorites: list[Track] = []
+    others: Playlists = {}
+    for name, tracks in playlists.items():
+        if name.casefold() == FAVORITES.casefold():
+            favorites.extend(track for track in tracks if track not in favorites)
+        else:
+            others[name] = tracks
+    return {FAVORITES: favorites, **others}
 
 
 def parse_tracks(items: object) -> list[Track] | None:

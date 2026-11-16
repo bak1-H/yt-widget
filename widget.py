@@ -16,7 +16,7 @@ from placement import WindowPlacement
 from playback import EMPTY_SNAPSHOT, LoadTracker, PlaybackState, QueueSnapshot, take_snapshot, upcoming
 from player import PlaybackStatus, Player, PlayerError, QueueItem
 from playlist_panel import PlaylistEvents, PlaylistPanel
-from playlists import PlaylistLibrary
+from playlists import FAVORITES, PlaylistLibrary
 from prefetch import Prefetcher
 from recommendations import Autoplay, Recommendation, pick_recommendations, queue_ended
 from repeat import RepeatMode, next_repeat
@@ -95,6 +95,7 @@ class PlayerWidget:
         self._commanded = False
         self._queue_ended = False
         self._page_urls: dict[str, str] = {}
+        self._synced_favorites: tuple[str, ...] | None = None
         theme.select(settings.theme)
         self._configure_window()
         self._placement = WindowPlacement(root)
@@ -203,6 +204,9 @@ class PlayerWidget:
     def _show_download_failed(self) -> None:
         self._status.show(texts.CACHE_DOWNLOAD_FAILED, "error")
 
+    def _show_favorites_no_space(self) -> None:
+        self._status.show(texts.FAVORITES_NO_SPACE, "error")
+
     def _active_glass_style(self) -> GlassStyle | None:
         return self._settings.glass_style if self._settings.glass else None
 
@@ -219,7 +223,7 @@ class PlayerWidget:
             self._status.show(texts.SETTINGS_SAVE_FAILED, "error")
 
     def _build_header(self) -> None:
-        self._header = NowPlayingHeader(self._root, self._close, self._close_tooltip, self._open_now_playing_menu, self._seek_to)
+        self._header = NowPlayingHeader(self._root, self._close, self._close_tooltip, self._open_now_playing_menu, self._toggle_now_playing_favorite, self._seek_to)
         self._header.pack(fill="x")
         self._thumbnails = ThumbnailFeed(self._thumbnail_loader, decode_thumbnail, self._header.show_thumbnail)
 
@@ -252,7 +256,7 @@ class PlayerWidget:
             self._request_new_playlist,
         )
         menu_actions = SongMenuActions(
-            self._actions.play_now, self._actions.play_next, self._actions.enqueue, self._actions.set_membership, self._actions.new_playlist
+            self._actions.play_now, self._actions.play_next, self._actions.enqueue, self._actions.set_membership, self._actions.new_playlist, self._set_favorite
         )
         self._song_menu = SongMenu(self._root, self._library, menu_actions)
 
@@ -308,7 +312,40 @@ class PlayerWidget:
         else:
             self._status.show(texts.NOTHING_PLAYING_YET)
 
+    def _toggle_now_playing_favorite(self) -> None:
+        if self._now:
+            self._set_favorite(self._now, not self._library.is_favorite(self._now.uri))
+        else:
+            self._status.show(texts.NOTHING_PLAYING_YET)
+
+    def _set_favorite(self, track: Track, liked: bool) -> None:
+        page_url = self._page_urls.get(track.uri)
+        if liked and track.uri.startswith(SEARCH_PREFIX) and not page_url:
+            self._resolver.submit(track.uri, lambda resolved: self._like_resolved(track, resolved))
+        else:
+            self._actions.set_membership(FAVORITES, Track(track.title, page_url or track.uri), liked)
+
+    def _like_resolved(self, track: Track, resolved: ResolvedTrack | None) -> None:
+        if resolved is None:
+            self._status.show(texts.not_found(display_name(None, track.uri)[:TITLE_PREVIEW_LENGTH]), "error")
+            return
+        self._page_urls[track.uri] = resolved.page_url
+        if not self._library.is_favorite(resolved.page_url):
+            self._actions.set_membership(FAVORITES, Track(resolved.title, resolved.page_url), True)
+
+    def _sync_favorites(self) -> None:
+        tracks = self._library.tracks(FAVORITES)
+        uris = tuple(track.uri for track in tracks)
+        if uris == self._synced_favorites:
+            return
+        self._synced_favorites = uris
+        self._cache.set_favorites({song_id for uri in uris if (song_id := video_id(uri))})
+        for track in tracks:
+            self._downloads.request(track.uri, track.title)
+
     def _playlist_changed(self, name: str, track: Track | None) -> None:
+        self._sync_favorites()
+        self._header.show_favorite(self._is_now_favorite())
         if track:
             self._sync_added_track(name, track)
         self._playlist_panel.refresh()
@@ -454,7 +491,8 @@ class PlayerWidget:
 
     def _tick(self) -> None:
         self._resolver.deliver()
-        self._downloads.deliver(self._show_download_failed)
+        self._downloads.deliver(self._show_download_failed, self._show_favorites_no_space)
+        self._sync_favorites()
         self._cache_jobs.deliver()
         self._thumbnails.deliver()
         observation = self._player.observe()
@@ -558,6 +596,7 @@ class PlayerWidget:
         downloaded = bool(path) and self._cache.is_stored(path)
         self._thumbnails.select(self._thumbnail_id(path))
         self._header.render(state, title, self._detail_text(status, state), ratio, downloaded)
+        self._header.show_favorite(self._is_now_favorite())
         self._controls.set_playing(state in ACTIVE_STATES)
         known_titles = self._known_titles()
         self._queue_list.show([(index, Track(display_name(item.title or known_titles.get(item.uri), item.uri), item.uri)) for index, item in upcoming(queue, self._wraps_queue())])
@@ -565,6 +604,9 @@ class PlayerWidget:
         self._queue_list.refresh_markers()
         self._history_list.refresh_markers()
         self._playlist_panel.refresh_markers()
+
+    def _is_now_favorite(self) -> bool:
+        return self._now is not None and self._library.is_favorite(self._now.uri)
 
     def _page_url(self, path: str | None) -> str | None:
         return self._page_urls.get(path, path) if path else None

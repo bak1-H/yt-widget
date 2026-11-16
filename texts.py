@@ -39,6 +39,11 @@ REPEAT_TOOLTIPS = {
 }
 DOWNLOADED_TOOLTIP = "Guardada en el disco, suena sin internet"
 SONG_OPTIONS = "Opciones de la canción"
+FAVORITES = "Me gusta"
+FAVORITES_LABEL = "♥ Me gusta"
+FAVORITE_TOOLTIP = "Me gusta"
+UNFAVORITE_TOOLTIP = "Quitar de Me gusta"
+FAVORITES_PROTECTED = "'Me gusta' no se puede eliminar"
 CLOSE_TOOLTIPS = {CloseAction.HIDE: "Ocultar en la bandeja", CloseAction.QUIT: "Cerrar el widget"}
 
 QUEUE_TAB = "En cola"
@@ -133,6 +138,7 @@ CACHE_BUSY = "Espera a que termine la operación en curso"
 CACHE_CLEAR_FAILED = "No se pudieron borrar algunas canciones guardadas"
 CACHE_MOVE_FAILED = "No se pudieron mover las canciones guardadas"
 CACHE_DOWNLOAD_FAILED = "No se pudo guardar una canción en el disco"
+FAVORITES_NO_SPACE = "No hay espacio en el disco para guardar tus canciones de Me gusta"
 LOW_DISK_SPACE = "poco espacio en el disco"
 CACHE_UPDATE_FAILED = "No se pudo actualizar la carpeta de canciones guardadas"
 CLEAR_HISTORY = "Borrar historial"
@@ -223,9 +229,10 @@ def size(byte_count: int) -> str:
     return gigabytes(gb) if gb >= 1 else f"{round(byte_count / 1024**2)} MB"
 
 
-def cache_usage(bytes_used: int, limit_gb: float, songs: int) -> str:
+def cache_usage(bytes_used: int, limit_gb: float, songs: int, favorite_bytes: int = 0) -> str:
     noun = "canción" if songs == 1 else "canciones"
-    return f"{size(bytes_used)} de {gigabytes(limit_gb)} · {songs} {noun}"
+    text = f"{size(bytes_used)} de {gigabytes(limit_gb)} · {songs} {noun}"
+    return f"{text} · {size(favorite_bytes)} en {FAVORITES}" if favorite_bytes else text
 
 
 def cache_usage_tooltip(bytes_used: int, limit_gb: float, percent: int) -> str:

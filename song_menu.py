@@ -4,7 +4,7 @@ from typing import Callable
 
 import texts
 import theme
-from playlists import PlaylistLibrary
+from playlists import FAVORITES, PlaylistLibrary
 from track import Track
 
 
@@ -15,6 +15,7 @@ class SongMenuActions:
     enqueue: Callable[[Track], None]
     set_membership: Callable[[str, Track, bool], None]
     new_playlist: Callable[[Track], None]
+    set_favorite: Callable[[Track, bool], None]
 
 
 @dataclass(frozen=True)
@@ -38,9 +39,13 @@ class SongMenu:
         self._menu = styled_menu(parent)
         self._playlists = styled_menu(self._menu)
         self._memberships: list[tk.BooleanVar] = []
+        self._liked = tk.BooleanVar()
 
     def open(self, x: int, y: int, track: Track, context: MenuContext = MenuContext()) -> None:
         self._menu.delete(0, "end")
+        self._liked.set(self._library.is_favorite(track.uri))
+        self._menu.add_checkbutton(label=texts.FAVORITES, variable=self._liked, command=lambda: self._actions.set_favorite(track, self._liked.get()))
+        self._menu.add_separator()
         if not context.now_playing:
             self._menu.add_command(label=texts.PLAY_NOW, command=context.play_now or (lambda: self._actions.play_now(track)))
         if not context.queue_entry:
@@ -57,6 +62,8 @@ class SongMenu:
         self._playlists.delete(0, "end")
         self._memberships = []
         for name in self._library.names():
+            if name == FAVORITES:
+                continue
             member = tk.BooleanVar(value=self._library.contains(name, track.uri))
             self._memberships.append(member)
             self._playlists.add_checkbutton(

@@ -10,6 +10,11 @@ class CacheUsageTest(unittest.TestCase):
         self.assertEqual(texts.cache_usage(round(1.3 * GB), 2.0, 312), "1,3 GB de 2 GB · 312 canciones")
         self.assertEqual(texts.cache_usage(5 * GB, 10.0, 40), "5 GB de 10 GB · 40 canciones")
 
+    def test_favorites_size_is_appended_only_when_there_are_favorites(self) -> None:
+        self.assertEqual(texts.cache_usage(GB, 2.0, 3, round(1.2 * GB)), "1 GB de 2 GB · 3 canciones · 1,2 GB en Me gusta")
+        self.assertEqual(texts.cache_usage(0, 2.0, 0, 300 * 1024**2), "0 MB de 2 GB · 0 canciones · 300 MB en Me gusta")
+        self.assertEqual(texts.cache_usage(GB, 2.0, 3, 0), "1 GB de 2 GB · 3 canciones")
+
     def test_small_usage_is_shown_in_megabytes_and_singular_is_respected(self) -> None:
         self.assertEqual(texts.cache_usage(480 * 1024**2, 0.5, 1), "480 MB de 0,5 GB · 1 canción")
         self.assertEqual(texts.cache_usage(0, 2.0, 0), "0 MB de 2 GB · 0 canciones")

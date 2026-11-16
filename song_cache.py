@@ -5,7 +5,7 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 from json_store import read_json, write_json_atomic
 from media import is_video_id, video_id
@@ -32,6 +32,7 @@ class CacheEntry:
 class CacheUsage:
     bytes_used: int
     songs: int
+    favorite_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -134,6 +135,7 @@ class SongCache:
         self._dirty = False
         self._busy = False
         self._relocations: dict[str, str | None] = {}
+        self._favorites: frozenset[str] = frozenset()
         self._entries = self._load(folder)
         self.enabled = enabled
         self.playing_file: str | None = None
@@ -161,14 +163,28 @@ class SongCache:
     def contains(self, song_id: str) -> bool:
         return song_id in self._entries
 
+    def accepts(self, song_id: str) -> bool:
+        return self.enabled or song_id in self._favorites
+
+    def is_favorite(self, song_id: str) -> bool:
+        return song_id in self._favorites
+
+    def set_favorites(self, song_ids: Iterable[str]) -> None:
+        with self._lock:
+            chosen = frozenset(song_ids)
+            released = self._favorites - chosen
+            self._favorites = chosen
+            if released and self._evict():
+                self._save()
+
     def is_stored(self, uri: str) -> bool:
         song_id = video_id(uri)
-        return self.enabled and song_id is not None and song_id in self._entries
+        return song_id is not None and self.accepts(song_id) and song_id in self._entries
 
     def find(self, uri: str) -> LocalSong | None:
         song_id = video_id(uri)
         with self._lock:
-            entry = self._entries.get(song_id) if self.enabled and not self._busy and song_id else None
+            entry = self._entries.get(song_id) if song_id and self.accepts(song_id) and not self._busy else None
             if entry is None:
                 return None
             path = self._path(entry)
@@ -191,7 +207,9 @@ class SongCache:
 
     def usage(self) -> CacheUsage:
         with self._lock:
-            return CacheUsage(sum(entry.size for entry in self._entries.values()), len(self._entries))
+            regular = [entry for song_id, entry in self._entries.items() if song_id not in self._favorites]
+            favorite_bytes = sum(entry.size for song_id, entry in self._entries.items() if song_id in self._favorites)
+            return CacheUsage(sum(entry.size for entry in regular), len(regular), favorite_bytes)
 
     def take_relocations(self) -> dict[str, str | None]:
         with self._lock:
@@ -206,6 +224,8 @@ class SongCache:
             for song_id, entry in entries.items():
                 if _stopped(stop):
                     break
+                if song_id in self._favorites:
+                    continue
                 path = (entry.folder or folder) / entry.file_name
                 if str(path) == keep:
                     kept = True
@@ -300,9 +320,10 @@ class SongCache:
     def _evict(self) -> bool:
         if self._busy:
             return False
-        total = sum(entry.size for entry in self._entries.values())
+        regular = {song_id: entry for song_id, entry in self._entries.items() if song_id not in self._favorites}
+        total = sum(entry.size for entry in regular.values())
         removed = False
-        for song_id, entry in sorted(self._entries.items(), key=lambda item: item[1].last_played):
+        for song_id, entry in sorted(regular.items(), key=lambda item: item[1].last_played):
             if total <= self._limit_bytes:
                 break
             path = self._path(entry)

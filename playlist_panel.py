@@ -6,7 +6,7 @@ import texts
 import theme
 from components import IconButton, SearchEntry, StatusLine, add_focus_ring
 from media import display_name, shorten
-from playlists import PlaylistExistsError, PlaylistLibrary
+from playlists import FAVORITES, PlaylistExistsError, PlaylistLibrary
 from song_menu import SongMenu
 from theme import Icon
 from track import Track
@@ -19,6 +19,10 @@ NAME_PREVIEW_LENGTH = 24
 TITLE_PREVIEW_LENGTH = 28
 AWAITING_TIMEOUT_MS = 60000
 HINT_WRAP_PIXELS = 330
+
+
+def playlist_label(name: str) -> str:
+    return texts.FAVORITES_LABEL if name == FAVORITES else name
 
 
 @dataclass(frozen=True)
@@ -198,13 +202,13 @@ class PlaylistPanel(tk.Frame):
     def _rebuild_menu(self) -> None:
         self._menu.delete(0, "end")
         for name in self._names:
-            self._menu.add_command(label=name, command=lambda chosen=name: self._select(chosen))
+            self._menu.add_command(label=playlist_label(name), command=lambda chosen=name: self._select(chosen))
         if self._selected not in self._names:
             self._show_selection(self._names[0] if self._names else "")
 
     def _show_selection(self, name: str) -> None:
         self._selected = name
-        self._menu_button.configure(text=f"{name}  ▾" if name else texts.NO_PLAYLIST)
+        self._menu_button.configure(text=f"{playlist_label(name)}  ▾" if name else texts.NO_PLAYLIST)
 
     def _select(self, name: str) -> None:
         changed = name != self._selected
@@ -257,6 +261,9 @@ class PlaylistPanel(tk.Frame):
         name = self.selected
         if not name:
             self._status.show(texts.CREATE_FIRST, "error")
+            return
+        if name == FAVORITES:
+            self._status.show(texts.FAVORITES_PROTECTED, "error")
             return
         tracks = self._library.tracks(name)
         try:

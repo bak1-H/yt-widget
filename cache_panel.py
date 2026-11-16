@@ -86,7 +86,7 @@ class CachePanel:
         ratio = used_ratio(usage.bytes_used, limit_bytes(self._limit_gb))
         space = self._drive_space.read(self._cache.folder)
         low_space = bool(space and space.is_low)
-        self._usage_label.configure(text=texts.cache_usage(usage.bytes_used, self._limit_gb, usage.songs))
+        self._usage_label.configure(text=texts.cache_usage(usage.bytes_used, self._limit_gb, usage.songs, usage.favorite_bytes))
         self._storage_bar.show(ratio, texts.cache_usage_tooltip(usage.bytes_used, self._limit_gb, used_percent(ratio)), low_space)
         self._free_label.configure(text=texts.drive_free(space.free_bytes, space.drive, low_space) if space else "")
 

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from playlists import MAX_NAME_LENGTH, JsonPlaylistStore, PlaylistExistsError, PlaylistLibrary, PlaylistNameError, Playlists
+from playlists import FAVORITES, MAX_NAME_LENGTH, JsonPlaylistStore, PlaylistExistsError, PlaylistLibrary, PlaylistNameError, Playlists
 from track import Track
 
 SONG = Track("Song", "uri-1")
@@ -31,7 +31,7 @@ class PlaylistLibraryTest(unittest.TestCase):
 
     def test_create_trims_name(self) -> None:
         self.assertEqual(self.library.create("  Gym  "), "Gym")
-        self.assertEqual(self.library.names(), ["Gym"])
+        self.assertEqual(self.library.names(), [FAVORITES, "Gym"])
 
     def test_rejects_blank_and_too_long_names(self) -> None:
         for name in ("   ", "x" * (MAX_NAME_LENGTH + 1)):
@@ -48,16 +48,16 @@ class PlaylistLibraryTest(unittest.TestCase):
     def test_names_sorted_case_insensitive(self) -> None:
         for name in ("study", "Gym", "chill"):
             self.library.create(name)
-        self.assertEqual(self.library.names(), ["chill", "Gym", "study"])
+        self.assertEqual(self.library.names(), [FAVORITES, "chill", "Gym", "study"])
 
     def test_add_remove_delete_persist(self) -> None:
         self.library.create("Gym")
         self.library.add("Gym", SONG)
         self.library.add("Gym", OTHER)
         self.library.remove("Gym", 0)
-        self.assertEqual(self.store.saved, {"Gym": [OTHER]})
+        self.assertEqual(self.store.saved, {FAVORITES: [], "Gym": [OTHER]})
         self.library.delete("Gym")
-        self.assertEqual(self.store.saved, {})
+        self.assertEqual(self.store.saved, {FAVORITES: []})
 
     def test_restore_brings_back_name_and_tracks(self) -> None:
         self.library.create("Gym")
@@ -65,7 +65,7 @@ class PlaylistLibraryTest(unittest.TestCase):
         tracks = self.library.tracks("Gym")
         self.library.delete("Gym")
         self.library.restore("Gym", tracks)
-        self.assertEqual(self.store.saved, {"Gym": [SONG]})
+        self.assertEqual(self.store.saved, {FAVORITES: [], "Gym": [SONG]})
 
     def test_restore_refuses_taken_name(self) -> None:
         self.library.create("Gym")
@@ -104,7 +104,7 @@ class PlaylistLibraryTest(unittest.TestCase):
             self.library.add(name, SONG)
         resolved = Track("Real title", "https://youtube.com/watch?v=1")
         self.library.replace(SONG.uri, resolved)
-        self.assertEqual(self.store.saved, {"A": [resolved], "B": [resolved]})
+        self.assertEqual(self.store.saved, {FAVORITES: [], "A": [resolved], "B": [resolved]})
 
     def test_failed_save_rolls_back_every_change(self) -> None:
         self.library.create("Gym")
@@ -121,8 +121,77 @@ class PlaylistLibraryTest(unittest.TestCase):
         for attempt in attempts:
             with self.assertRaises(OSError):
                 attempt()
-        self.assertEqual(self.library.names(), ["Gym"])
+        self.assertEqual(self.library.names(), [FAVORITES, "Gym"])
         self.assertEqual(self.library.tracks("Gym"), (SONG,))
+
+    def test_favorites_always_exist_and_come_first(self) -> None:
+        self.assertEqual(self.library.names(), [FAVORITES])
+        self.assertEqual(self.library.tracks(FAVORITES), ())
+        for name in ("Zeta", "alpha"):
+            self.library.create(name)
+        self.assertEqual(self.library.names(), [FAVORITES, "alpha", "Zeta"])
+
+    def test_favorites_cannot_be_deleted(self) -> None:
+        self.library.add(FAVORITES, SONG)
+        with self.assertRaises(PlaylistNameError):
+            self.library.delete(FAVORITES)
+        self.assertEqual(self.library.tracks(FAVORITES), (SONG,))
+        self.assertEqual(self.store.saved, {FAVORITES: [SONG]})
+
+    def test_favorites_name_is_reserved_ignoring_case(self) -> None:
+        for name in (FAVORITES, FAVORITES.upper(), "  me GUSTA "):
+            with self.assertRaises(PlaylistExistsError) as raised:
+                self.library.create(name)
+            self.assertEqual(raised.exception.existing, FAVORITES)
+        with self.assertRaises(PlaylistExistsError):
+            self.library.restore(FAVORITES, (SONG,))
+        self.assertEqual(self.library.tracks(FAVORITES), ())
+
+    def test_is_favorite_matches_by_uri(self) -> None:
+        self.library.add(FAVORITES, SONG)
+        self.assertTrue(self.library.is_favorite(SONG.uri))
+        self.assertFalse(self.library.is_favorite(OTHER.uri))
+        self.library.remove(FAVORITES, 0)
+        self.assertFalse(self.library.is_favorite(SONG.uri))
+
+    def test_failed_save_keeps_favorites(self) -> None:
+        self.library.add(FAVORITES, SONG)
+        self.store.failing = True
+        with self.assertRaises(OSError):
+            self.library.add(FAVORITES, OTHER)
+        self.assertEqual(self.library.tracks(FAVORITES), (SONG,))
+
+
+class FavoritesFromOldFilesTest(unittest.TestCase):
+    def load(self, content: str | None) -> PlaylistLibrary:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "playlists.json"
+        if content is not None:
+            path.write_text(content, encoding="utf-8")
+        return PlaylistLibrary(JsonPlaylistStore(path))
+
+    def test_old_file_without_favorites_gets_an_empty_one_first(self) -> None:
+        library = self.load('{"Gym": [{"title": "Song", "uri": "uri-1"}]}')
+        self.assertEqual(library.names(), [FAVORITES, "Gym"])
+        self.assertEqual(library.tracks("Gym"), (SONG,))
+        self.assertEqual(library.tracks(FAVORITES), ())
+
+    def test_missing_or_damaged_file_still_has_favorites(self) -> None:
+        self.assertEqual(self.load(None).names(), [FAVORITES])
+        self.assertEqual(self.load("{broken").names(), [FAVORITES])
+
+    def test_a_user_playlist_with_the_reserved_name_is_merged_not_lost(self) -> None:
+        library = self.load('{"me gusta": [{"title": "Song", "uri": "uri-1"}], "Gym": []}')
+        self.assertEqual(library.names(), [FAVORITES, "Gym"])
+        self.assertEqual(library.tracks(FAVORITES), (SONG,))
+
+    def test_favorites_survive_a_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "playlists.json"
+            library = PlaylistLibrary(JsonPlaylistStore(path))
+            library.add(FAVORITES, SONG)
+            self.assertEqual(PlaylistLibrary(JsonPlaylistStore(path)).tracks(FAVORITES), (SONG,))
 
 
 class JsonPlaylistStoreTest(unittest.TestCase):

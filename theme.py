@@ -249,6 +249,8 @@ class Icon:
     REPEAT_OFF = ""
     REPEAT_ONE = ""
     DOWNLOADED = ""
+    HEART = ""
+    HEART_FILLED = ""
 
 
 class Restylable(Protocol):

@@ -11,6 +11,7 @@ from media import video_id
 from processes import TrackedProcesses
 from settings import CacheQuality
 from song_cache import SongCache
+from storage import DriveSpace, drive_space
 
 DOWNLOAD_TIMEOUT_SECONDS = 900
 QUALITY_FORMATS = {
@@ -22,6 +23,10 @@ Download = Callable[[str, Path, CacheQuality], Path]
 
 
 class DownloadError(RuntimeError):
+    pass
+
+
+class LowDiskSpaceError(DownloadError):
     pass
 
 
@@ -70,9 +75,10 @@ class _Job:
 
 
 class SongDownloads:
-    def __init__(self, cache: SongCache, download: Download) -> None:
+    def __init__(self, cache: SongCache, download: Download, measure_space: Callable[[Path], DriveSpace | None] = drive_space) -> None:
         self._cache = cache
         self._download = download
+        self._measure_space = measure_space
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="downloader")
         self._jobs: list[_Job] = []
         self._in_flight: set[str] = set()
@@ -81,20 +87,27 @@ class SongDownloads:
 
     def request(self, page_url: str, title: str) -> None:
         song_id = video_id(page_url)
-        if not self._cache.enabled or song_id is None or song_id in self._in_flight or self._cache.contains(song_id):
+        if song_id is None or not self._cache.accepts(song_id) or song_id in self._in_flight or self._cache.contains(song_id):
             return
         folder = self._cache.folder
         self._in_flight.add(song_id)
-        self._jobs.append(_Job(song_id, title, folder, self._executor.submit(self._download, page_url, folder, self.quality)))
+        guard_space = self._cache.is_favorite(song_id)
+        self._jobs.append(_Job(song_id, title, folder, self._executor.submit(self._run, page_url, folder, self.quality, guard_space)))
 
-    def deliver(self, on_error: Callable[[], None]) -> None:
+    def deliver(self, on_error: Callable[[], None], on_low_space: Callable[[], None] | None = None) -> None:
         finished = [job for job in self._jobs if job.future.done()]
         self._jobs = [job for job in self._jobs if job not in finished]
-        run_each(partial(self._finish, job, on_error) for job in finished)
+        run_each(partial(self._finish, job, on_error, on_low_space or on_error) for job in finished)
 
-    def _finish(self, job: _Job, on_error: Callable[[], None]) -> None:
+    def _run(self, page_url: str, folder: Path, quality: CacheQuality, guard_space: bool) -> Path:
+        space = self._measure_space(folder) if guard_space else None
+        if space and space.is_low:
+            raise LowDiskSpaceError(f"Not enough disk space for {page_url}")
+        return self._download(page_url, folder, quality)
+
+    def _finish(self, job: _Job, on_error: Callable[[], None], on_low_space: Callable[[], None]) -> None:
         self._in_flight.discard(job.song_id)
-        self._complete(job, on_error)
+        self._complete(job, on_low_space if isinstance(job.future.exception(), LowDiskSpaceError) else on_error)
 
     def close(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
@@ -105,7 +118,7 @@ class SongDownloads:
             return
         file = job.future.result()
         try:
-            stored = self._cache.enabled and job.folder == self._cache.folder and self._cache.add(job.song_id, file, job.title)
+            stored = self._cache.accepts(job.song_id) and job.folder == self._cache.folder and self._cache.add(job.song_id, file, job.title)
         except OSError:
             self._fail(on_error)
             return

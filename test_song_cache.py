@@ -310,6 +310,115 @@ class SongCacheTest(unittest.TestCase):
         self.assertTrue(partial.exists())
 
 
+class FavoritesTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.folder = Path(self.directory.name) / "songs"
+        self.clock = Clock()
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def cache(self, limit: int = 1000, enabled: bool = True) -> SongCache:
+        return SongCache(self.folder, limit, enabled, self.clock)
+
+    def song_file(self, song_id: str, size: int) -> Path:
+        self.folder.mkdir(parents=True, exist_ok=True)
+        path = self.folder / f"{song_id}.webm"
+        path.write_bytes(b"x" * size)
+        return path
+
+    def test_favorites_are_never_evicted_by_the_limit(self) -> None:
+        cache = self.cache(limit=500)
+        cache.set_favorites({FIRST})
+        cache.add(FIRST, self.song_file(FIRST, 400), "First")
+        cache.add(SECOND, self.song_file(SECOND, 300), "Second")
+        cache.add(THIRD, self.song_file(THIRD, 300), "Third")
+        self.assertTrue(cache.contains(FIRST))
+        self.assertFalse(cache.contains(SECOND))
+        self.assertTrue(cache.contains(THIRD))
+        self.assertTrue((self.folder / f"{FIRST}.webm").exists())
+
+    def test_favorites_do_not_count_against_the_limit(self) -> None:
+        cache = self.cache(limit=100)
+        cache.set_favorites({FIRST})
+        cache.add(FIRST, self.song_file(FIRST, 900), "First")
+        cache.add(SECOND, self.song_file(SECOND, 80), "Second")
+        self.assertTrue(cache.contains(SECOND))
+        usage = cache.usage()
+        self.assertEqual((usage.bytes_used, usage.songs, usage.favorite_bytes), (80, 1, 900))
+
+    def test_lowering_the_limit_spares_favorites(self) -> None:
+        cache = self.cache()
+        cache.set_favorites({FIRST})
+        cache.add(FIRST, self.song_file(FIRST, 300), "First")
+        cache.add(SECOND, self.song_file(SECOND, 300), "Second")
+        cache.configure(True, self.folder, 10)
+        self.assertTrue(cache.contains(FIRST))
+        self.assertFalse(cache.contains(SECOND))
+
+    def test_clear_keeps_favorites(self) -> None:
+        cache = self.cache()
+        cache.set_favorites({FIRST})
+        cache.add(FIRST, self.song_file(FIRST, 10), "First")
+        cache.add(SECOND, self.song_file(SECOND, 10), "Second")
+        report = cache.clear()
+        self.assertFalse(report.failed)
+        self.assertTrue((self.folder / f"{FIRST}.webm").exists())
+        self.assertFalse((self.folder / f"{SECOND}.webm").exists())
+        self.assertTrue(self.cache().contains(FIRST))
+        self.assertEqual(cache.usage().favorite_bytes, 10)
+
+    def test_a_released_favorite_becomes_a_normal_evictable_entry(self) -> None:
+        cache = self.cache(limit=300)
+        cache.set_favorites({FIRST})
+        cache.add(FIRST, self.song_file(FIRST, 300), "First")
+        cache.add(SECOND, self.song_file(SECOND, 300), "Second")
+        cache.set_favorites(set())
+        self.assertFalse(cache.contains(FIRST))
+        self.assertTrue(cache.contains(SECOND))
+        self.assertFalse((self.folder / f"{FIRST}.webm").exists())
+        self.assertEqual(cache.take_relocations(), {str(self.folder / f"{FIRST}.webm"): None})
+
+    def test_a_released_favorite_is_cleared_like_any_other(self) -> None:
+        cache = self.cache()
+        cache.set_favorites({FIRST})
+        cache.add(FIRST, self.song_file(FIRST, 10), "First")
+        cache.set_favorites(set())
+        cache.clear()
+        self.assertFalse((self.folder / f"{FIRST}.webm").exists())
+
+    def test_favorites_are_found_and_marked_while_the_cache_is_off(self) -> None:
+        cache = self.cache(enabled=False)
+        cache.set_favorites({FIRST})
+        cache.add(FIRST, self.song_file(FIRST, 10), "First")
+        cache.add(SECOND, self.song_file(SECOND, 10), "Second")
+        self.assertEqual(cache.find(url_of(FIRST)).title, "First")
+        self.assertTrue(cache.is_stored(url_of(FIRST)))
+        self.assertIsNone(cache.find(url_of(SECOND)))
+        self.assertFalse(cache.is_stored(url_of(SECOND)))
+
+    def test_accepts_follows_the_flag_or_favorites(self) -> None:
+        cache = self.cache(enabled=False)
+        self.assertFalse(cache.accepts(FIRST))
+        cache.set_favorites({FIRST})
+        self.assertTrue(cache.accepts(FIRST))
+        self.assertTrue(cache.is_favorite(FIRST))
+        self.assertFalse(cache.accepts(SECOND))
+        cache.enabled = True
+        self.assertTrue(cache.accepts(SECOND))
+
+    def test_move_keeps_favorites_protected(self) -> None:
+        cache = self.cache(limit=10)
+        cache.set_favorites({FIRST})
+        cache.add(FIRST, self.song_file(FIRST, 300), "First")
+        destination = Path(self.directory.name) / "elsewhere"
+        cache.move_to(destination)
+        cache.configure(True, destination, 10)
+        self.assertTrue(cache.contains(FIRST))
+        self.assertTrue((destination / f"{FIRST}.webm").exists())
+
+
 class FolderTest(unittest.TestCase):
     def test_default_folder_prefers_project_drive_then_local_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

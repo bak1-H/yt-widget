@@ -13,7 +13,7 @@ from theme import Icon
 from thumbnail_view import WIDTH as THUMBNAIL_WIDTH
 from thumbnail_view import ThumbnailBox, ThumbnailImage
 
-TITLE_WIDTH_CHARS = 36
+TITLE_WIDTH_CHARS = 32
 MARKER_WIDTH_CHARS = 2
 BADGE_SIZE = 22
 LEAD_GAP = 10
@@ -26,6 +26,7 @@ class NowPlayingHeader(tk.Frame):
         on_close: Callable[[], None],
         close_tooltip: TooltipText,
         on_menu: Callable[[int, int], None],
+        on_favorite: Callable[[], None],
         on_seek: Callable[[float], None],
     ) -> None:
         super().__init__(parent)
@@ -61,9 +62,12 @@ class NowPlayingHeader(tk.Frame):
         theme.bind(detail, bg="background", fg="muted")
         detail.pack(fill="x")
         more = IconButton(row, Icon.MORE, lambda: on_menu(more.winfo_rootx(), more.winfo_rooty() + more.winfo_height()), variant="ghost", tooltip=texts.SONG_OPTIONS)
+        self._liked = False
+        self._favorite = IconButton(row, Icon.HEART, on_favorite, variant="ghost", tooltip=lambda: texts.UNFAVORITE_TOOLTIP if self._liked else texts.FAVORITE_TOOLTIP)
         close = IconButton(row, Icon.CLOSE, on_close, variant="ghost", tooltip=close_tooltip)
         close.pack(side="right", anchor="n")
         more.pack(side="right", anchor="n")
+        self._favorite.pack(side="right", anchor="n")
         Tooltip(title, lambda: self._title.get() if self._title_font.measure(self._title.get()) > title.winfo_width() else "")
         enable_dragging(parent, row, lead, self._indicator, self._cover, text, title_row, title, self._marker, detail)
         self._progress = SliderBar(self, on_change=on_seek, live=False)
@@ -79,6 +83,13 @@ class NowPlayingHeader(tk.Frame):
         self._show_downloaded(downloaded)
         self._detail.set(detail)
         self._progress.set_ratio(ratio)
+
+    def show_favorite(self, liked: bool) -> None:
+        if liked == self._liked:
+            return
+        self._liked = liked
+        self._favorite.set_icon(Icon.HEART_FILLED if liked else Icon.HEART)
+        self._favorite.set_foreground("accent" if liked else "muted")
 
     def _show_downloaded(self, downloaded: bool) -> None:
         if bool(self._marker.cget("text")) != downloaded:
